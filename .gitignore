@@ -1,0 +1,7 @@
+RAG/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+RAG/indexes/
+*.egg-info/
+.DS_Store

@@ -1,0 +1,18 @@
+embed: embeddinggemma
+rewrite: qwen3.5:0.8b
+ollama_host: http://127.0.0.1:11434
+rewrite_enabled: true
+hyde: true
+
+store_dir: indexes
+docs_path: ../docs
+
+child_tokens: 256
+parent_tokens: 1024
+overlap_tokens: 32
+chunk: parent_child
+
+collections:
+  default:
+    path: ../docs
+    chunk: parent_child
