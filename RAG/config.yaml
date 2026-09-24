@@ -12,6 +12,18 @@ parent_tokens: 1024
 overlap_tokens: 32
 chunk: parent_child
 
+# Ingestion : textes par requête /api/embed, et requêtes simultanées.
+# embed_workers > 1 n'aide que si Ollama tourne avec OLLAMA_NUM_PARALLEL > 1.
+embed_batch: 16
+embed_workers: 1
+
+# Fusion RRF : poids de chaque liste dense (Gemma) et lexicale (BM25).
+# Monter bm25_weight (ex. 1.5) aide sur un corpus riche en termes exacts
+# (gènes, acronymes, références d'articles).
+dense_weight: 1.0
+bm25_weight: 1.0
+rrf_k: 60
+
 collections:
   default:
     path: ../docs

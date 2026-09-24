@@ -56,3 +56,34 @@ def test_unknown_flag_is_rejected_as_json():
     payload = _json_stdout(proc)
     assert payload["ok"] is False
     assert "unrecognized arguments: --unknown-option" in payload["error"]
+
+
+def test_list_collections_reports_configured_and_indexed_state(tmp_path):
+    rag_dir = tmp_path / "RAG"
+    (rag_dir / "indexes").mkdir(parents=True)
+    config = rag_dir / "config.yaml"
+    config.write_text(
+        "store_dir: indexes\ncollections:\n  default:\n    path: ../docs\n  notes:\n    path: ../notes\n",
+        encoding="utf-8",
+    )
+    sys.path.insert(0, str(RAG_ROOT))
+    from rag.store import Store
+
+    Store(rag_dir / "indexes" / "notes.sqlite").close()
+
+    proc = subprocess.run(
+        [sys.executable, str(RAG_ROOT / "search.py"), "--list-collections", "--config", str(config)],
+        cwd=WORKDIR,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    payload = _json_stdout(proc)
+    by_name = {c["name"]: c for c in payload["collections"]}
+    assert set(by_name) == {"default", "notes"}
+    assert by_name["default"]["indexed"] is False
+    assert by_name["notes"]["indexed"] is True
+    assert by_name["notes"]["documents"] == 0
+    assert by_name["notes"]["docs_path"] == str((tmp_path / "notes").resolve())

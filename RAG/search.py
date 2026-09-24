@@ -33,6 +33,36 @@ def emit(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False))
 
 
+def _index_dir(cfg: dict) -> Path:
+    return resolve(cfg, cfg.get("store_dir", "indexes"))
+
+
+def list_collections(cfg: dict) -> list[dict]:
+    index_dir = _index_dir(cfg)
+    configured = set((cfg.get("collections") or {}).keys())
+    on_disk = {p.stem for p in index_dir.glob("*.sqlite")} if index_dir.is_dir() else set()
+    out = []
+    for name in sorted(configured | on_disk):
+        db_path = index_dir / f"{name}.sqlite"
+        entry = {
+            "name": name,
+            "configured": name in configured,
+            "docs_path": str(resolve(cfg, collection_cfg(cfg, name)["path"])),
+            "index": str(db_path),
+            "indexed": db_path.exists(),
+            "documents": 0,
+            "chunks": 0,
+        }
+        if db_path.exists():
+            store = Store(db_path)
+            try:
+                entry.update(store.stats(name))
+            finally:
+                store.close()
+        out.append(entry)
+    return out
+
+
 def main() -> int:
     p = JsonArgumentParser(description="Search the local RAG index")
     p.add_argument("query", nargs="?", help="Question")
@@ -41,7 +71,16 @@ def main() -> int:
     p.add_argument("--collection", default="default")
     p.add_argument("--no-rewrite", action="store_true")
     p.add_argument("--config", default=None)
+    p.add_argument(
+        "--list-collections", action="store_true", help="List collections and index sizes"
+    )
     args = p.parse_args()
+
+    if args.list_collections:
+        cfg = load_config(Path(args.config) if args.config else None)
+        emit({"ok": True, "collections": list_collections(cfg)})
+        return 0
+
     question = (args.query_opt or args.query or "").strip()
     if not question:
         emit({"ok": False, "error": "missing query"})
@@ -52,7 +91,7 @@ def main() -> int:
 
     cfg = load_config(Path(args.config) if args.config else None)
     col = collection_cfg(cfg, args.collection)
-    db_path = resolve(cfg, cfg.get("store_dir", "indexes")) / f"{col['name']}.sqlite"
+    db_path = _index_dir(cfg) / f"{col['name']}.sqlite"
     if not db_path.exists():
         emit({"ok": False, "error": "empty index — run ingest.py first", "index": str(db_path)})
         return 2
@@ -84,6 +123,9 @@ def main() -> int:
             queries=rewritten,
             hyde_text=hyde_text,
             k=args.k,
+            dense_weight=float(cfg.get("dense_weight", 1.0)),
+            bm25_weight=float(cfg.get("bm25_weight", 1.0)),
+            rrf_k=int(cfg.get("rrf_k", 60)),
         )
     finally:
         store.close()

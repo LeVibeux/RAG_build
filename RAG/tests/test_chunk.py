@@ -62,3 +62,21 @@ def test_empty_text_produces_no_chunks():
 def test_unknown_strategy_is_rejected():
     with pytest.raises(ValueError, match="unknown chunk strategy"):
         chunk_pages([(None, "texte")], strategy="semantic")
+
+
+def test_section_strategy_ignores_the_unused_overlap_bound():
+    # `section` never slides a window, so overlap_tokens >= child_tokens must
+    # not be rejected here even though it would be invalid for parent_child/window.
+    chunks = chunk_pages(
+        [(None, "# Titre\n\nUn petit bloc de texte.")],
+        strategy="section",
+        child_tokens=10,
+        parent_tokens=10,
+        overlap_tokens=50,
+    )
+    assert len(chunks) == 1
+
+
+def test_parent_child_still_rejects_overlap_not_smaller_than_child():
+    with pytest.raises(ValueError, match="overlap_tokens must be smaller"):
+        chunk_pages([(None, "texte")], strategy="parent_child", overlap_tokens=256)
