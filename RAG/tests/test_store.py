@@ -53,6 +53,54 @@ def test_replace_document_fts_and_vectors(tmp_path):
         store.close()
 
 
+def test_document_sha_enables_skip_on_unchanged_reingest(tmp_path):
+    store = Store(tmp_path / "index.sqlite")
+    try:
+        assert store.document_sha("../docs/contrat.md") is None
+
+        store.replace_document(
+            collection="default",
+            path="../docs/contrat.md",
+            title="contrat",
+            sha="abc123",
+            rows=[_row("La clause d’agrément protège les associés.", [1.0, 0.0])],
+        )
+
+        assert store.document_sha("../docs/contrat.md") == "abc123"
+        assert store.document_sha("../docs/absent.md") is None
+    finally:
+        store.close()
+
+
+def test_prune_missing_removes_deleted_documents_and_their_chunks(tmp_path):
+    store = Store(tmp_path / "index.sqlite")
+    try:
+        store.replace_document(
+            collection="default",
+            path="../docs/keep.md",
+            title="keep",
+            sha="sha-keep",
+            rows=[_row("Texte conservé.", [1.0, 0.0])],
+        )
+        store.replace_document(
+            collection="default",
+            path="../docs/stale.md",
+            title="stale",
+            sha="sha-stale",
+            rows=[_row("Texte supprimé du dossier docs.", [0.0, 1.0])],
+        )
+        assert store.stats("default") == {"documents": 2, "chunks": 2}
+
+        removed = store.prune_missing("default", {"../docs/keep.md"})
+
+        assert removed == 1
+        assert store.stats("default") == {"documents": 1, "chunks": 1}
+        assert store.document_sha("../docs/stale.md") is None
+        assert store.fts("default", "supprimé", 5) == []
+    finally:
+        store.close()
+
+
 def test_fts_ignores_only_punctuation_and_one_letter_tokens(tmp_path):
     store = Store(tmp_path / "index.sqlite")
     try:

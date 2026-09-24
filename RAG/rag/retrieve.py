@@ -62,6 +62,8 @@ def search(
     fused = _rrf([*dense_lists, *[hits for hits in fts_hits if hits]])
     ranked = sorted(fused.items(), key=lambda item: (-item[1], item[0]))[:pool]
     max_score = ranked[0][1] if ranked else 1.0
+    doc_ids = {int(id_to_row[cid]["doc_id"]) for cid, _ in ranked if cid in id_to_row}
+    doc_paths = _doc_paths(store, doc_ids)
     hits = []
     for cid, score in ranked:
         row = id_to_row.get(cid)
@@ -73,7 +75,7 @@ def search(
                 "text": row["parent_text"] or row["text"],
                 "child": row["text"],
                 "score": float(score / max_score),
-                "path": _doc_path(store, int(row["doc_id"])),
+                "path": doc_paths.get(int(row["doc_id"]), ""),
                 "page": row["page"],
                 "locator": row["locator"],
                 "collection": collection,
@@ -83,6 +85,12 @@ def search(
     return hits[:k]
 
 
-def _doc_path(store: Store, doc_id: int) -> str:
-    row = store.con.execute("SELECT path FROM documents WHERE id=?", (doc_id,)).fetchone()
-    return row["path"] if row else ""
+def _doc_paths(store: Store, doc_ids: set[int]) -> dict[int, str]:
+    if not doc_ids:
+        return {}
+    placeholders = ",".join("?" * len(doc_ids))
+    rows = store.con.execute(
+        f"SELECT id, path FROM documents WHERE id IN ({placeholders})",
+        tuple(doc_ids),
+    )
+    return {int(r["id"]): r["path"] for r in rows}

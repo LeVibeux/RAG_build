@@ -28,7 +28,7 @@ python RAG/search.py --query "question" --no-rewrite
 python RAG/search.py --query "question" --collection default
 ```
 
-Chaque commande écrit un seul objet JSON sur stdout. Les diagnostics éventuels vont sur stderr. L’ingestion renvoie notamment `files`, `chunks`, `stats` et le chemin absolu de l’index. Une recherche réussie suit ce contrat :
+Chaque commande écrit un seul objet JSON sur stdout. Les diagnostics éventuels vont sur stderr. L’ingestion renvoie notamment `files` (nouveaux ou modifiés), `skipped` (fichiers inchangés, identifiés par sha256, ni re-découpés ni ré-embarqués), `removed` (documents supprimés de l’index car absents du dossier source), `chunks`, `stats` et le chemin absolu de l’index. Relancer `ingest.py` sur un dossier déjà indexé est donc rapide : seuls les fichiers nouveaux/modifiés déclenchent un appel Ollama, et les fichiers effacés sont purgés de l’index. Une recherche réussie suit ce contrat :
 
 ```json
 {

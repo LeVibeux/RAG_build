@@ -85,7 +85,7 @@ def chunk_pages(
         raise ValueError(f"unknown chunk strategy: {strategy}")
     if min(child_tokens, parent_tokens) <= 0 or overlap_tokens < 0:
         raise ValueError("chunk token sizes must be positive and overlap non-negative")
-    if overlap_tokens >= child_tokens:
+    if strategy in {"parent_child", "window"} and overlap_tokens >= child_tokens:
         raise ValueError("overlap_tokens must be smaller than child_tokens")
     if strategy == "parent_child" and child_tokens > parent_tokens:
         raise ValueError("child_tokens must not exceed parent_tokens")

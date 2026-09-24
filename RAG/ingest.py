@@ -55,9 +55,18 @@ def main() -> int:
 
     store = Store(db_path)
     ingested = 0
+    skipped = 0
     chunks_n = 0
+    keep_paths: set[str] = set()
     try:
         for path in files:
+            rel = os.path.relpath(path, start=HERE)
+            keep_paths.add(rel)
+            sha = file_sha(path)
+            if store.document_sha(rel) == sha:
+                skipped += 1
+                continue
+
             pages = load_pages(path)
             chunks = chunk_pages(
                 pages,
@@ -69,7 +78,6 @@ def main() -> int:
             if not chunks:
                 continue
             vectors = embed_texts(host, model, [c.text for c in chunks])
-            rel = os.path.relpath(path, start=HERE)
             rows = [
                 {
                     "text": c.text,
@@ -85,15 +93,16 @@ def main() -> int:
                 collection=col["name"],
                 path=rel,
                 title=path.stem,
-                sha=file_sha(path),
+                sha=sha,
                 rows=rows,
             )
             ingested += 1
+        removed = store.prune_missing(col["name"], keep_paths)
         stats = store.stats(col["name"])
     finally:
         store.close()
 
-    if not ingested:
+    if not ingested and not skipped:
         emit({"ok": False, "error": f"no extractable text in {docs_dir}"})
         return 2
 
@@ -103,6 +112,8 @@ def main() -> int:
             "collection": col["name"],
             "docs_dir": str(docs_dir),
             "files": ingested,
+            "skipped": skipped,
+            "removed": removed,
             "chunks": chunks_n,
             "index": str(db_path),
             "stats": stats,

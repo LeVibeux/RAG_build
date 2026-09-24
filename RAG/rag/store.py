@@ -113,6 +113,26 @@ class Store:
                 )
         return len(rows)
 
+    def document_sha(self, path: str) -> str | None:
+        row = self.con.execute(
+            "SELECT sha FROM documents WHERE path = ?", (path,)
+        ).fetchone()
+        return row["sha"] if row else None
+
+    def prune_missing(self, collection: str, keep_paths: set[str]) -> int:
+        """Delete documents (and their chunks, via cascade) no longer present on disk."""
+        rows = self.con.execute(
+            "SELECT id, path FROM documents WHERE collection = ?", (collection,)
+        ).fetchall()
+        stale_ids = [r["id"] for r in rows if r["path"] not in keep_paths]
+        if not stale_ids:
+            return 0
+        with self.con:
+            self.con.executemany(
+                "DELETE FROM documents WHERE id = ?", [(i,) for i in stale_ids]
+            )
+        return len(stale_ids)
+
     def stats(self, collection: str | None = None) -> dict:
         if collection:
             n_docs = self.con.execute(
