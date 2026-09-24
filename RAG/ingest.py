@@ -21,7 +21,7 @@ sys.path.insert(0, str(HERE))
 from rag.chunk import chunk_pages  # noqa: E402
 from rag.config import collection_cfg, load_config, resolve  # noqa: E402
 from rag.embed import embed_texts  # noqa: E402
-from rag.store import Store, file_sha  # noqa: E402
+from rag.store import Store, embed_key, file_sha  # noqa: E402
 from rag.textio import iter_source_files, load_pages  # noqa: E402
 
 
@@ -39,6 +39,9 @@ def main() -> int:
     p.add_argument("--path", help="Override docs folder")
     p.add_argument("--collection", default="default")
     p.add_argument("--config", default=None)
+    p.add_argument(
+        "--force", action="store_true", help="Re-chunk every file even if unchanged"
+    )
     args = p.parse_args()
 
     cfg = load_config(Path(args.config) if args.config else None)
@@ -47,6 +50,19 @@ def main() -> int:
     db_path = resolve(cfg, cfg.get("store_dir", "indexes")) / f"{col['name']}.sqlite"
     host = cfg.get("ollama_host", "http://127.0.0.1:11434")
     model = cfg.get("embed", "embeddinggemma")
+    batch = int(cfg.get("embed_batch", 16))
+    workers = int(cfg.get("embed_workers", 1))
+    # Changing the embed model or chunking must invalidate "unchanged file" skips.
+    params = json.dumps(
+        {
+            "embed": model,
+            "chunk": col["chunk"],
+            "child_tokens": col["child_tokens"],
+            "parent_tokens": col["parent_tokens"],
+            "overlap_tokens": col["overlap_tokens"],
+        },
+        sort_keys=True,
+    )
 
     files = iter_source_files(docs_dir)
     if not files:
@@ -57,13 +73,26 @@ def main() -> int:
     ingested = 0
     skipped = 0
     chunks_n = 0
+    embedded = 0
+    reused = 0
     keep_paths: set[str] = set()
     try:
         for path in files:
             rel = os.path.relpath(path, start=HERE)
             keep_paths.add(rel)
+            st = path.stat()
+            state = store.document_state(rel)
+            same_params = bool(state) and state["params"] == params and not args.force
+            if (
+                same_params
+                and state["mtime_ns"] == st.st_mtime_ns
+                and state["size"] == st.st_size
+            ):
+                skipped += 1
+                continue
             sha = file_sha(path)
-            if store.document_sha(rel) == sha:
+            if same_params and state["sha"] == sha:
+                store.touch_document(rel, st.st_mtime_ns, st.st_size)
                 skipped += 1
                 continue
 
@@ -77,7 +106,16 @@ def main() -> int:
             )
             if not chunks:
                 continue
-            vectors = embed_texts(host, model, [c.text for c in chunks])
+            keys = [embed_key(model, c.text) for c in chunks]
+            vectors = store.cached_embeddings(set(keys))
+            missing = {k: c.text for k, c in zip(keys, chunks) if k not in vectors}
+            reused += sum(1 for k in keys if k in vectors)
+            if missing:
+                fresh = embed_texts(
+                    host, model, list(missing.values()), batch=batch, workers=workers
+                )
+                vectors.update(zip(missing.keys(), fresh))
+                embedded += len(missing)
             rows = [
                 {
                     "text": c.text,
@@ -85,9 +123,10 @@ def main() -> int:
                     "locator": c.locator,
                     "page": c.page,
                     "kind": c.kind,
-                    "embedding": vectors[i],
+                    "embedding": vectors[k],
+                    "embed_key": k,
                 }
-                for i, c in enumerate(chunks)
+                for k, c in zip(keys, chunks)
             ]
             chunks_n += store.replace_document(
                 collection=col["name"],
@@ -95,6 +134,9 @@ def main() -> int:
                 title=path.stem,
                 sha=sha,
                 rows=rows,
+                mtime_ns=st.st_mtime_ns,
+                size=st.st_size,
+                params=params,
             )
             ingested += 1
         removed = store.prune_missing(col["name"], keep_paths)
@@ -115,6 +157,8 @@ def main() -> int:
             "skipped": skipped,
             "removed": removed,
             "chunks": chunks_n,
+            "embedded": embedded,
+            "reused": reused,
             "index": str(db_path),
             "stats": stats,
         }

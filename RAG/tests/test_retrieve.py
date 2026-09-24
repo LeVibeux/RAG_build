@@ -108,3 +108,37 @@ def test_hybrid_search_resolves_paths_across_several_documents(monkeypatch, tmp_
         assert {h["path"] for h in hits} == {"../docs/a.md", "../docs/b.md"}
     finally:
         store.close()
+
+
+def test_rrf_weights_shift_the_fused_ranking():
+    dense = [1, 2]
+    bm25 = [2, 1]
+
+    assert retrieve._rrf([dense, bm25], [1.0, 1.0])[1] == retrieve._rrf([dense, bm25])[1]
+    favour_bm25 = retrieve._rrf([dense, bm25], [1.0, 2.0])
+    favour_dense = retrieve._rrf([dense, bm25], [2.0, 1.0])
+    assert favour_bm25[2] > favour_bm25[1]
+    assert favour_dense[1] > favour_dense[2]
+
+
+def test_query_embedding_size_mismatch_is_reported(monkeypatch, tmp_path):
+    import pytest
+
+    store = Store(tmp_path / "index.sqlite")
+    try:
+        store.replace_document(
+            collection="default",
+            path="../docs/a.md",
+            title="a",
+            sha="a",
+            rows=[_row("texte a", "Parent A", [1.0, 0.0], "A")],
+        )
+        monkeypatch.setattr(
+            retrieve, "embed_texts", lambda host, model, texts: [[1.0, 0.0, 0.0] for _ in texts]
+        )
+        with pytest.raises(ValueError, match="another embed model"):
+            retrieve.search(
+                store, host="h", embed_model="m", collection="default", queries=["texte"]
+            )
+    finally:
+        store.close()

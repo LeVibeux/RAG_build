@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 import urllib.request
 
 
@@ -27,16 +28,25 @@ def _post(host: str, path: str, payload: dict, timeout: float = 120.0) -> dict:
     return body
 
 
-def embed_texts(host: str, model: str, texts: list[str], batch: int = 16) -> list[list[float]]:
-    vectors: list[list[float]] = []
-    for i in range(0, len(texts), batch):
-        chunk = texts[i : i + batch]
-        body = _post(host, "/api/embed", {"model": model, "input": chunk}, timeout=180.0)
-        embs = body.get("embeddings")
-        if not embs or len(embs) != len(chunk):
-            raise OllamaError(f"unexpected embed response keys={list(body)}")
-        vectors.extend(embs)
-    return vectors
+def _embed_batch(host: str, model: str, chunk: list[str]) -> list[list[float]]:
+    body = _post(host, "/api/embed", {"model": model, "input": chunk}, timeout=180.0)
+    embs = body.get("embeddings")
+    if not embs or len(embs) != len(chunk):
+        raise OllamaError(f"unexpected embed response keys={list(body)}")
+    return embs
+
+
+def embed_texts(
+    host: str, model: str, texts: list[str], batch: int = 16, workers: int = 1
+) -> list[list[float]]:
+    batches = [texts[i : i + max(1, batch)] for i in range(0, len(texts), max(1, batch))]
+    if workers <= 1 or len(batches) <= 1:
+        results = [_embed_batch(host, model, b) for b in batches]
+    else:
+        # Ollama serves up to OLLAMA_NUM_PARALLEL requests at once; map() keeps order.
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(lambda b: _embed_batch(host, model, b), batches))
+    return [vec for embs in results for vec in embs]
 
 
 def generate(

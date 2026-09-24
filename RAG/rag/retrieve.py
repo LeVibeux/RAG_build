@@ -16,12 +16,22 @@ def _l2_normalize(mat: np.ndarray) -> np.ndarray:
     return mat / norms
 
 
-def _rrf(rank_lists: list[list[int]], k: int = 60) -> dict[int, float]:
+def _rrf(
+    rank_lists: list[list[int]], weights: list[float] | None = None, k: int = 60
+) -> dict[int, float]:
+    weights = weights or [1.0] * len(rank_lists)
     scores: dict[int, float] = defaultdict(float)
-    for ranking in rank_lists:
+    for ranking, weight in zip(rank_lists, weights):
         for rank, cid in enumerate(ranking, start=1):
-            scores[cid] += 1.0 / (k + rank)
+            scores[cid] += weight / (k + rank)
     return dict(scores)
+
+
+def _top_indices(scores: np.ndarray, n: int) -> np.ndarray:
+    if n >= scores.shape[0]:
+        return np.argsort(-scores)
+    top = np.argpartition(-scores, n)[:n]
+    return top[np.argsort(-scores[top])]
 
 
 def search(
@@ -34,9 +44,12 @@ def search(
     hyde_text: str = "",
     k: int = 8,
     pool: int = 24,
+    dense_weight: float = 1.0,
+    bm25_weight: float = 1.0,
+    rrf_k: int = 60,
 ) -> list[dict]:
-    mat, rows = store.all_vectors(collection)
-    if not rows:
+    mat, ids = store.all_vectors(collection)
+    if not ids:
         return []
 
     q_texts = [q for q in queries if q.strip()]
@@ -45,28 +58,31 @@ def search(
     if not q_texts:
         return []
     q_vecs = np.asarray(embed_texts(host, embed_model, q_texts), dtype=np.float32)
-    docs = _l2_normalize(mat)
-    qn = _l2_normalize(q_vecs)
-    sim = qn @ docs.T  # (nq, n)
+    if q_vecs.shape[1] != mat.shape[1]:
+        raise ValueError(
+            f"query embedding size {q_vecs.shape[1]} != index size {mat.shape[1]}: "
+            "the index was built with another embed model — re-run ingest.py"
+        )
+    sim = _l2_normalize(q_vecs) @ _l2_normalize(mat).T  # (nq, n)
 
-    id_to_row = {int(r["id"]): r for r in rows}
-    dense_lists = [
-        [int(rows[i]["id"]) for i in np.argsort(-query_scores)[:pool]]
-        for query_scores in sim
+    dense_lists = [[ids[i] for i in _top_indices(row, pool)] for row in sim]
+    fts_lists = [
+        hits for hits in ([cid for cid, _ in store.fts(collection, q, pool)] for q in queries) if hits
     ]
-    fts_hits: list[list[int]] = []
-    for q in queries:
-        pairs = store.fts(collection, q, pool)
-        fts_hits.append([cid for cid, _ in pairs])
 
-    fused = _rrf([*dense_lists, *[hits for hits in fts_hits if hits]])
-    ranked = sorted(fused.items(), key=lambda item: (-item[1], item[0]))[:pool]
-    max_score = ranked[0][1] if ranked else 1.0
-    doc_ids = {int(id_to_row[cid]["doc_id"]) for cid, _ in ranked if cid in id_to_row}
-    doc_paths = _doc_paths(store, doc_ids)
+    fused = _rrf(
+        [*dense_lists, *fts_lists],
+        [dense_weight] * len(dense_lists) + [bm25_weight] * len(fts_lists),
+        k=rrf_k,
+    )
+    ranked = sorted(fused.items(), key=lambda item: (-item[1], item[0]))[:k]
+    if not ranked:
+        return []
+    max_score = ranked[0][1] or 1.0
+    rows = store.chunks_by_ids([cid for cid, _ in ranked])
     hits = []
     for cid, score in ranked:
-        row = id_to_row.get(cid)
+        row = rows.get(cid)
         if row is None:
             continue
         hits.append(
@@ -75,22 +91,10 @@ def search(
                 "text": row["parent_text"] or row["text"],
                 "child": row["text"],
                 "score": float(score / max_score),
-                "path": doc_paths.get(int(row["doc_id"]), ""),
+                "path": row["path"],
                 "page": row["page"],
                 "locator": row["locator"],
                 "collection": collection,
             }
         )
-
-    return hits[:k]
-
-
-def _doc_paths(store: Store, doc_ids: set[int]) -> dict[int, str]:
-    if not doc_ids:
-        return {}
-    placeholders = ",".join("?" * len(doc_ids))
-    rows = store.con.execute(
-        f"SELECT id, path FROM documents WHERE id IN ({placeholders})",
-        tuple(doc_ids),
-    )
-    return {int(r["id"]): r["path"] for r in rows}
+    return hits
