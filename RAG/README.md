@@ -39,7 +39,7 @@ L’ingestion est incrémentale ; la relancer après chaque ajout de documents e
 1. un fichier dont la date de modification, la taille **et** les réglages (modèle d’embedding, stratégie et tailles de chunk) sont identiques au dernier passage est ignoré sans même être relu ;
 2. sinon son sha256 est recalculé : contenu identique → ignoré aussi ;
 3. sinon le fichier est re-découpé, mais chaque chunk dont le texte a déjà été embarqué (dans n’importe quel document de la collection) réutilise son vecteur. Modifier une section d’un long document ne ré-embarque que cette section ;
-4. les documents disparus du dossier source sont retirés de l’index.
+4. les documents disparus du dossier source sont retirés de l’index, y compris quand ce dossier devient vide. Seuls les documents situés sous le dossier ingéré sont concernés : `--path autre_dossier` ajoute à la collection sans effacer le reste. Un dossier inexistant (faute de frappe, disque non monté) renvoie une erreur sans toucher à l’index.
 
 Changer `embed`, `chunk`, `child_tokens`, `parent_tokens` ou `overlap_tokens` force automatiquement la ré-ingestion des fichiers concernés. `--force` sert uniquement si un fichier a été modifié en conservant sa date et sa taille (ex. `rsync -t`).
 

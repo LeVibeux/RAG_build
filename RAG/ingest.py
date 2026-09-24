@@ -64,9 +64,22 @@ def main() -> int:
         sort_keys=True,
     )
 
+    # A missing folder (typo, unmounted drive) must never empty the index.
+    if not docs_dir.is_dir():
+        emit({"ok": False, "error": f"docs folder not found: {docs_dir}"})
+        return 2
+    docs_rel = os.path.relpath(docs_dir, start=HERE)
+
     files = iter_source_files(docs_dir)
     if not files:
-        emit({"ok": False, "error": f"no documents in {docs_dir}"})
+        removed = 0
+        if db_path.exists():
+            store = Store(db_path)
+            try:
+                removed = store.prune_missing(col["name"], set(), under=docs_rel)
+            finally:
+                store.close()
+        emit({"ok": False, "error": f"no documents in {docs_dir}", "removed": removed})
         return 2
 
     store = Store(db_path)
@@ -139,7 +152,7 @@ def main() -> int:
                 params=params,
             )
             ingested += 1
-        removed = store.prune_missing(col["name"], keep_paths)
+        removed = store.prune_missing(col["name"], keep_paths, under=docs_rel)
         stats = store.stats(col["name"])
     finally:
         store.close()

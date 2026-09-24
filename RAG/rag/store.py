@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -173,12 +174,22 @@ class Store:
                 out.setdefault(r["embed_key"], np.frombuffer(r["embedding"], dtype=np.float32))
         return out
 
-    def prune_missing(self, collection: str, keep_paths: set[str]) -> int:
-        """Delete documents (and their chunks, via cascade) no longer present on disk."""
+    def prune_missing(
+        self, collection: str, keep_paths: set[str], under: str | None = None
+    ) -> int:
+        """Delete documents no longer on disk; `under` restricts it to one source folder."""
         rows = self.con.execute(
             "SELECT id, path FROM documents WHERE collection = ?", (collection,)
         ).fetchall()
-        stale_ids = [r["id"] for r in rows if r["path"] not in keep_paths]
+
+        def inside(path: str) -> bool:
+            if under is None or under == os.curdir:
+                return True
+            return path == under or path.startswith(under.rstrip(os.sep) + os.sep)
+
+        stale_ids = [
+            r["id"] for r in rows if r["path"] not in keep_paths and inside(r["path"])
+        ]
         if not stale_ids:
             return 0
         with self.con:

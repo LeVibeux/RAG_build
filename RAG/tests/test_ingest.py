@@ -113,3 +113,50 @@ def test_deleted_file_is_removed_from_the_index(workdir, capsys):
 
     assert result["removed"] == 1
     assert result["stats"]["documents"] == 1
+
+
+def _run_raw(env, capsys, *extra) -> tuple[int, dict]:
+    env["monkeypatch"].setattr(
+        sys, "argv", ["ingest.py", "--config", str(env["config"]), *extra]
+    )
+    code = ingest.main()
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_emptied_folder_prunes_its_documents(workdir, capsys):
+    _run(workdir, capsys)
+    for f in workdir["docs"].iterdir():
+        f.unlink()
+
+    code, result = _run_raw(workdir, capsys)
+
+    assert code == 2
+    assert result["error"].startswith("no documents in ")
+    assert result["removed"] == 2
+
+
+def test_ingesting_another_folder_keeps_documents_from_the_first(workdir, capsys, tmp_path):
+    first = _run(workdir, capsys)
+    other = tmp_path / "docs2"
+    other.mkdir()
+    (other / "c.md").write_text("# Delta\n\nAutre dossier.\n", encoding="utf-8")
+
+    result = _run(workdir, capsys, "--path", str(other))
+
+    assert result["removed"] == 0
+    assert result["stats"]["documents"] == first["stats"]["documents"] + 1
+
+    empty = tmp_path / "vide"
+    empty.mkdir()
+    code, result = _run_raw(workdir, capsys, "--path", str(empty))
+    assert (code, result["removed"]) == (2, 0)
+
+
+def test_missing_folder_is_an_error_and_leaves_the_index_intact(workdir, capsys, tmp_path):
+    first = _run(workdir, capsys)
+
+    code, result = _run_raw(workdir, capsys, "--path", str(tmp_path / "absent"))
+
+    assert code == 2
+    assert result["error"].startswith("docs folder not found")
+    assert _run(workdir, capsys)["stats"] == first["stats"]

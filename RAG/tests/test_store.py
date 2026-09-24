@@ -236,3 +236,17 @@ def test_mixed_embedding_sizes_raise_a_clear_error(tmp_path):
             store.all_vectors("default")
     finally:
         store.close()
+
+
+def test_prune_missing_under_only_touches_that_folder(tmp_path):
+    store = Store(tmp_path / "index.sqlite")
+    try:
+        for path in ("../docs/a.md", "../docs2/b.md"):
+            store.replace_document(
+                collection="default", path=path, title="t", sha="s", rows=[_row("x", [1.0])]
+            )
+
+        assert store.prune_missing("default", set(), under="../docs") == 1
+        assert store.document_state("../docs2/b.md") is not None
+    finally:
+        store.close()
